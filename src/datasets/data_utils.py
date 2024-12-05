@@ -7,6 +7,45 @@ import os, shutil
 from src.datasets.collate import collate_fn
 from src.utils.init_utils import set_worker_seed
 
+def prepare_lj_speech_dataset(root_path, train_size=0.8, random_state=1):
+    root_path = Path(root_path)
+    metadf = pd.read_csv(root_path / 'metadata.csv', delimiter='|', header=None)
+    
+    # fix some data bugs
+    mask = metadf[2].isna()
+    bugs = metadf.loc[mask, 1].str.split('|', expand=True)
+    metadf.loc[mask, 2] = bugs.loc[:, 1] 
+
+    train_path = root_path / 'train'
+    val_path = root_path / 'val'
+    
+    def create_folder(path):
+        if not path.exists():
+            os.mkdir(str(path))
+
+    for path in [train_path, val_path]:
+        create_folder(path)
+        create_folder(path / 'wavs')
+        create_folder(path / 'transcriptions')
+
+    metadf = metadf.sample(frac=1, random_state=random_state).reset_index(drop=True)
+    train_len = int(len(metadf) * train_size)
+    train_df = metadf.iloc[:train_len]
+    val_df = metadf.iloc[train_len:]
+
+    def save_df(df, path):
+        for _, (audio_name, _, transcription) in df.iterrows():
+            with open(path / 'transcriptions' / f'{audio_name}.txt', 'w', encoding='utf-8') as f:
+                f.write(transcription)
+
+            shutil.move(path.parent / 'wavs' / f'{audio_name}.wav', 
+                        path / 'wavs' / f'{audio_name}.wav')
+
+    save_df(train_df, train_path)
+    save_df(val_df, val_path)
+    shutil.rmtree(root_path / 'wavs')
+    os.remove(root_path / 'metadata.csv')
+
 
 def inf_loop(dataloader):
     """
