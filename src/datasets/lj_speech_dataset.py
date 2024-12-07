@@ -2,55 +2,80 @@ import numpy as np
 import torch
 from tqdm.auto import tqdm
 
+import torchaudio
+
 from pathlib import Path
 from src.datasets.base_dataset import BaseDataset
 from src.utils.io_utils import read_json, write_json
 
+from src.utils.mel_spec_utils import MelSpectrogram, MelSpectrogramConfig
 # Не вижу смысла делать его параметром, так как пользователю он не нужен
 # Оставлю для читабельности и гибкости редактирования
 INDEX_NAME = 'index.json'
 
 class LJSpeechDataset(BaseDataset):
     def __init__(
-        self, dataset_path, split_name, *args, **kwargs
+        self, dataset_path, split_name, force_recreate, *args, **kwargs
     ):
-        print('constructor')
         dataset_path = Path(dataset_path)
-        root_path = dataset_path / split_name
-        index_path = root_path / INDEX_NAME
-
-        if index_path.exists():
+        split_path = dataset_path / split_name
+        index_path = split_path / INDEX_NAME
+        if index_path.exists() and not force_recreate:
             index = read_json(str(index_path))
         else:
-            index = self._create_index(root_path, *args, **kwargs)
+            index = self._create_index(split_path, *args, **kwargs)
 
         super().__init__(index, *args, **kwargs)
 
-    def _create_index(self, root_path, *args, **kwargs):
-        print('index')
-        # index = []
-        # data_path = ROOT_PATH / "data" / "example" / name
-        # data_path.mkdir(exist_ok=True, parents=True)
+    def _create_index(self, split_path, transcription, audio, temp_mels, mel_creation_type,
+                      *args, **kwargs):
 
-        # # to get pretty object names
-        # number_of_zeros = int(np.log10(dataset_length)) + 1
+        index = []
+        assert not (transcription is None and split_path is None), 'At least one of the audio/transcription parameters must not be None'
+        assert temp_mels is not None, 'temp_mels must be provided'
 
-        # # In this example, we create a synthesized dataset. However, in real
-        # # tasks, you should process dataset metadata and append it
-        # # to index. See other branches.
-        # print("Creating Example Dataset")
-        # for i in tqdm(range(dataset_length)):
-        #     # create dataset
-        #     example_path = data_path / f"{i:0{number_of_zeros}d}.pt"
-        #     example_data = torch.randn(input_length)
-        #     example_label = torch.randint(n_classes, size=(1,)).item()
-        #     torch.save(example_data, example_path)
+        data = audio if audio is not None else transcription
+        data_names = [file.stem for file in (split_path / data).iterdir()]
+        if not (split_path / temp_mels).exists():
+            (split_path / temp_mels).mkdir(exist_ok=True)
 
-        #     # parse dataset metadata and append it to index
-        #     index.append({"path": str(example_path), "label": example_label})
+        for data_name in tqdm(data_names, desc='Index'):
+            audio_full = str(split_path / audio / f'{data_name}.wav') if audio is not None else None
+            transcription_full = str(split_path / transcription / f'{data_name}.txt') if transcription is not None else None
+            mel_full = str(split_path / temp_mels / f'{data_name}.pt')
+            sample = {}
 
-        # # write index to disk
-        # write_json(index, str(data_path / "index.json"))
+            sample['audio'] = audio_full
 
-        # return index
-        return ['EEEEEE']
+            sample['mel'] = mel_full
+            mel = self.create_mel(audio_path=sample['audio'], 
+                                  creation_type=mel_creation_type)
+            torch.save(mel.squeeze(0).permute(1, 0), mel_full)  # [T, Batch, Bins]
+
+            if transcription_full is not None:
+                with open(transcription_full) as f:
+                    sample['transcription'] = f.read()
+            else:
+                sample['transcription'] = None
+            index.append(sample)
+
+        write_json(index, str(split_path / "index.json"))
+        return index
+        
+    def create_mel(self, audio_path, creation_type):        
+        if creation_type == 'audio_to_mel':
+            wav = self.load_audio(audio_path)
+            mel_config = MelSpectrogramConfig()
+            mel_model = MelSpectrogram(mel_config)
+            mel = mel_model.forward(wav)
+        elif creation_type == 'transcription_to_mel':
+            mel = None
+            #  TODO: for inference
+        elif creation_type == 'load_from_folder':
+            mel = None
+            #  TODO: for convenience
+        else:
+            mel = None
+        return mel
+
+

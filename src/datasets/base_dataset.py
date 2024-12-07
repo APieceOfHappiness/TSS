@@ -1,9 +1,12 @@
 import logging
 import random
 from typing import List
+import torchaudio
 
 import torch
 from torch.utils.data import Dataset
+
+from src.utils.mel_spec_utils import MelSpectrogram, MelSpectrogramConfig
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +21,9 @@ class BaseDataset(Dataset):
     """
 
     def __init__(
-        self, index, limit=None, shuffle_index=False, instance_transforms=None
+        self, index, temp_mels, mel_creation_type, 
+        limit=None, shuffle_index=False, instance_transforms=None,
+        *args, **kwargs
     ):
         """
         Args:
@@ -33,6 +38,9 @@ class BaseDataset(Dataset):
                 should be applied on the instance. Depend on the
                 tensor name.
         """
+        self.temp_mels = temp_mels
+        self.mel_creation_type = mel_creation_type
+
         self._assert_index_is_valid(index)
 
         index = self._shuffle_and_limit_index(index, limit, shuffle_index)
@@ -55,15 +63,22 @@ class BaseDataset(Dataset):
             instance_data (dict): dict, containing instance
                 (a single dataset element).
         """
-        data_dict = self._index[ind]
-        data_path = data_dict["path"]
-        data_object = self.load_object(data_path)
-        data_label = data_dict["label"]
+        instance_data = self._index[ind]
+        # data_object = self.load_object(data_path)
 
-        instance_data = {"data_object": data_object, "labels": data_label}
-        instance_data = self.preprocess_data(instance_data)
+        instance_data = self.preprocess_data(instance_data)  # it is for augmentations
+        instance_data['audio'] = self.load_audio(instance_data['audio'])
+        instance_data['mel'] = self.load_mel(instance_data['mel'])
 
         return instance_data
+    
+    def load_mel(self, mel_path):
+        return torch.load(mel_path)
+
+    def load_audio(self, path, target_sr=22050):
+        wav, sr = torchaudio.load(path)
+        assert sr == target_sr, f'sample_rate must be equal {target_sr}'
+        return wav
 
     def __len__(self):
         """
@@ -139,12 +154,17 @@ class BaseDataset(Dataset):
                 such as label and object path.
         """
         for entry in index:
-            assert "path" in entry, (
-                "Each dataset item should include field 'path'" " - path to audio file."
+            assert "mel" in entry, (
+                "Each dataset item should include field 'mel'"
+                " - path to mel spectrograms."
             )
-            assert "label" in entry, (
-                "Each dataset item should include field 'label'"
-                " - object ground-truth label."
+            assert "audio" in entry, (
+                "Each dataset item should include field 'audio'"
+                " - path to audio file or None."
+            )
+            assert "transcription" in entry, (
+                "Each dataset item should include field 'transcription'"
+                " - transcription of the speaker or None"
             )
 
     @staticmethod
@@ -186,4 +206,5 @@ class BaseDataset(Dataset):
 
         if limit is not None:
             index = index[:limit]
+
         return index
